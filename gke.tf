@@ -5,7 +5,11 @@ data "google_compute_zones" "available" {}
 
 data "google_container_engine_versions" "gke_version" {
   location       = var.region
-  version_prefix = "1.27."
+  version_prefix = var.gke_version_prefix
+}
+
+locals {
+  workload_pool = "${var.google_project}.svc.id.goog"
 }
 
 resource "google_container_cluster" "engineering" {
@@ -17,6 +21,32 @@ resource "google_container_cluster" "engineering" {
   # node pool and immediately delete it.
   remove_default_node_pool = true
   initial_node_count       = 1
+
+  enable_shielded_nodes = var.enable_pow_security
+  datapath_provider     = "ADVANCED_DATAPATH"
+
+  release_channel {
+    channel = "STABLE"
+  }
+
+  workload_identity_config {
+    workload_pool = local.workload_pool
+  }
+
+  binary_authorization {
+    evaluation_mode = var.enable_pow_security ? "PROJECT_SINGLETON_POLICY_ENFORCE" : "DISABLED"
+  }
+
+  security_posture_config {
+    mode               = var.enable_pow_security ? "BASIC" : "DISABLED"
+    vulnerability_mode = var.enable_pow_security ? "VULNERABILITY_BASIC" : "VULNERABILITY_DISABLED"
+  }
+
+  master_auth {
+    client_certificate_config {
+      issue_client_certificate = false
+    }
+  }
 
   ip_allocation_policy {}
 }
@@ -37,9 +67,23 @@ resource "google_container_node_pool" "engineering_preemptible_nodes" {
       disable-legacy-endpoints = "true"
     }
 
+    workload_metadata_config {
+      mode = "GKE_METADATA"
+    }
+
+    shielded_instance_config {
+      enable_secure_boot          = var.enable_pow_security
+      enable_integrity_monitoring = var.enable_pow_security
+    }
+
     oauth_scopes = [
       "https://www.googleapis.com/auth/logging.write",
       "https://www.googleapis.com/auth/monitoring",
     ]
+  }
+
+  management {
+    auto_repair  = true
+    auto_upgrade = true
   }
 }

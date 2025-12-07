@@ -23,3 +23,15 @@ variable "node_count" {
   description = "Number of nodes in the node pool"
   default     = 3
 }
+
+variable "gke_version_prefix" {
+  type        = string
+  default     = "1.29."
+  description = "GKE master version prefix to pin the cluster/channel to."
+}
+
+variable "enable_pow_security" {
+  type        = bool
+  description = "Toggle Protect-our-Workloads (PoW) security hardening features."
+  default     = true
+}
