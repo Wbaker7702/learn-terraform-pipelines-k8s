@@ -1,0 +1,97 @@
+import "strings"
+import "tfplan/v2" as tfplan
+
+pow_clusters = filter tfplan.resource_changes as change {
+  change.type == "google_container_cluster" and is_managed_change(change)
+}
+
+pow_node_pools = filter tfplan.resource_changes as change {
+  change.type == "google_container_node_pool" and is_managed_change(change)
+}
+
+has_attr = func(obj, key) {
+  typeof obj == "map" and any keys(obj) as candidate { candidate == key }
+}
+
+get_attr = func(obj, key, default) {
+  if typeof obj != "map" {
+    return default
+  }
+
+  has_attr(obj, key) ? obj[key] : default
+}
+
+get_block = func(obj, key) {
+  if typeof obj != "map" or not has_attr(obj, key) {
+    return null
+  }
+
+  candidate = obj[key]
+
+  if typeof candidate == "list" {
+    return length(candidate) > 0 ? candidate[0] : null
+  }
+
+  if typeof candidate == "map" {
+    return candidate
+  }
+
+  return null
+}
+
+is_managed_change = func(change) {
+  change.mode == "managed" and
+  change.change.after != null and
+  any change.change.actions as action { action != "delete" }
+}
+
+cluster_is_pow_hardened = func(cluster) {
+  after = cluster.change.after
+
+  workload_identity = get_block(after, "workload_identity_config")
+  binary_authorization = get_block(after, "binary_authorization")
+  posture = get_block(after, "security_posture_config")
+
+  workload_pool = workload_identity == null ? "" : get_attr(workload_identity, "workload_pool", "")
+  binary_mode = binary_authorization == null ? "" : get_attr(binary_authorization, "evaluation_mode", "")
+  posture_mode = posture == null ? "" : get_attr(posture, "mode", "")
+  vulnerability_mode = posture == null ? "" : get_attr(posture, "vulnerability_mode", "")
+  shielded_nodes_enabled = get_attr(after, "enable_shielded_nodes", false)
+
+  shielded_nodes_enabled and
+  workload_pool != "" and
+  strings.has_suffix(workload_pool, ".svc.id.goog") and
+  binary_mode == "PROJECT_SINGLETON_POLICY_ENFORCE" and
+  posture_mode == "BASIC" and
+  vulnerability_mode == "VULNERABILITY_BASIC"
+}
+
+node_pool_is_pow_hardened = func(node_pool) {
+  after = node_pool.change.after
+  node_config = get_attr(after, "node_config", null)
+
+  if node_config == null {
+    return false
+  }
+
+  shielded = get_block(node_config, "shielded_instance_config")
+  metadata = get_block(node_config, "workload_metadata_config")
+
+  secure_boot = shielded == null ? false : get_attr(shielded, "enable_secure_boot", false)
+  integrity = shielded == null ? false : get_attr(shielded, "enable_integrity_monitoring", false)
+  metadata_mode = metadata == null ? "" : get_attr(metadata, "node_metadata", "")
+
+  secure_boot and integrity and metadata_mode == "GKE_METADATA"
+}
+
+clusters_secure = rule {
+  all pow_clusters as cluster { cluster_is_pow_hardened(cluster) }
+}
+
+node_pools_secure = rule {
+  all pow_node_pools as node_pool { node_pool_is_pow_hardened(node_pool) }
+}
+
+main = rule {
+  clusters_secure and node_pools_secure
+}
